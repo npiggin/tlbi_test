@@ -125,7 +125,7 @@ static void set_cpu(int cpu)
 		err("sched_setaffinity");
 }
 
-#define MAX_CONCURRENCY 32
+#define MAX_CONCURRENCY 2048
 
 static pid_t procs[MAX_CONCURRENCY];
 static pthread_t threads[MAX_CONCURRENCY];
