@@ -1,4 +1,7 @@
-# tlbie_testUsage: tlbi_test [OPTION]...
+# tlbie_test
+
+Usage: tlbi_test [OPTION]...
+
 Exercise TLB invalidation via mprotect(2) system calls.
   Pages are divided between tlbi CPUs, and used by all snooper CPUs.
 Options:
