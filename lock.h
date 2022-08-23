@@ -19,7 +19,7 @@ static inline void lock(unsigned long *mem)
 
 	__asm__ __volatile__ (
 "1:	ldarx	%0,0,%2,1	# lock\n\
-	cmpdi	0,%0,0\n\
+	cmpdi	%0,0\n\
 	bne-	1b\n\
 	stdcx.	%3,0,%2\n\
 	bne-	1b\n\
@@ -27,12 +27,12 @@ static inline void lock(unsigned long *mem)
 2:"
 	: "=&r" (prev), "+m" (*mem)
 	: "r" (mem), "r" (new)
-	: "memory");
+	: "cc", "memory");
 }
 
 static inline void unlock(unsigned long *mem)
 {
-	unsigned long prev, new = 1;
+	unsigned long new = 0;
 
 	__asm__ __volatile__ (
 "	lwsync\n\
