@@ -77,11 +77,10 @@ static void perf_setup(void)
 
 	perf_fd = syscall(__NR_perf_event_open, &attr, 0, -1, -1, 0);
 	if (perf_fd == -1)
-		err("perf_event_open");
+		perror("perf_event_open");
 }
 
 static struct timespec perf_t1, perf_t2;
-static unsigned long perf_ns;
 
 static uint64_t ts_delta_ns(struct timespec *t1, struct timespec *t2)
 {
@@ -91,8 +90,10 @@ static uint64_t ts_delta_ns(struct timespec *t1, struct timespec *t2)
 
 static void perf_start(void)
 {
-	ioctl(perf_fd, PERF_EVENT_IOC_RESET);
-	prctl(PR_TASK_PERF_EVENTS_ENABLE);
+	if (perf_fd != -1) {
+		ioctl(perf_fd, PERF_EVENT_IOC_RESET);
+		prctl(PR_TASK_PERF_EVENTS_ENABLE);
+	}
 	clock_gettime(CLOCK_MONOTONIC, &perf_t1);
 }
 
@@ -102,15 +103,15 @@ static void perf_stop(uint64_t *ns, uint64_t *cycles)
 	int rc;
 
 	clock_gettime(CLOCK_MONOTONIC, &perf_t2);
-	prctl(PR_TASK_PERF_EVENTS_DISABLE);
-	rc = read(perf_fd, &result, sizeof(result));
-	if (rc != sizeof(result))
-		err("read perf result");
+	if (perf_fd != -1) {
+		prctl(PR_TASK_PERF_EVENTS_DISABLE);
+		rc = read(perf_fd, &result, sizeof(result));
+		if (rc != sizeof(result))
+			err("read perf result");
+		*cycles = result.value;
+	}
 
-	perf_ns = ts_delta_ns(&perf_t1, &perf_t2);
-
-	*ns = perf_ns;
-	*cycles = result.value;
+	*ns = ts_delta_ns(&perf_t1, &perf_t2);
 }
 
 static void set_cpu(int cpu)
@@ -740,6 +741,7 @@ static void getopts(int argc, char *argv[])
 			{"tlbi_strategy",	required_argument, 0, 0 },
 			{"tlbi_prot",		required_argument, 0, 0 },
 			{"snoop_work",		required_argument, 0, 0 },
+			{0, 0, 0, 0 }
 		};
 
 		c = getopt_long(argc, argv, "", long_options, &option_index);
@@ -841,6 +843,11 @@ static void getopts(int argc, char *argv[])
 		nr_pages = 1;
 
 	nr_cpus = nr_tlbi_cpus + nr_snoop_cpus;
+	if (nr_cpus == 0) {
+		fprintf(stderr, "Error: must specify at least one CPU\n");
+		exit(1);
+	}
+
 	cpulist = malloc(nr_cpus * sizeof(int));
 	memcpy(cpulist, tlbi_cpulist, nr_tlbi_cpus * sizeof(int));
 	memcpy(cpulist + nr_tlbi_cpus, snoop_cpulist, nr_snoop_cpus * sizeof(int));

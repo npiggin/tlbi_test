@@ -21,12 +21,12 @@ static inline void lock(unsigned long *mem)
 "1:	ldarx	%0,0,%2,1	# lock\n\
 	cmpdi	0,%0,0\n\
 	bne-	1b\n\
-	stdcx.	%4,0,%2\n\
+	stdcx.	%3,0,%2\n\
 	bne-	1b\n\
-	lwsync
+	lwsync \n\
 2:"
 	: "=&r" (prev), "+m" (*mem)
-	: "r" (mem), "r" (old), "r" (new)
+	: "r" (mem), "r" (new)
 	: "memory");
 }
 
@@ -36,7 +36,7 @@ static inline void unlock(unsigned long *mem)
 
 	__asm__ __volatile__ (
 "	lwsync\n\
-	stdx	%2,0,%0\n\
+	std	%2,%0\n\
 "
 	: "+m" (*mem)
 	: "r" (mem), "r" (new) : "memory");
