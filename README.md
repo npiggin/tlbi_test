@@ -10,7 +10,8 @@ and thus become targets of the invalidations, and they can perform some
 workloads (either on the primary working set or their own private working
 sets or both) which may influence the performance of the tlbie threads.
 
-```Usage: tlbi_test [OPTION]...
+```
+Usage: tlbi_test [OPTION]...
 Exercise TLB invalidation via mprotect(2) system calls.
   Pages are divided between tlbi CPUs, and used by all snooper CPUs.
 Options:
@@ -31,4 +32,5 @@ Options:
           memset: store to all primary working set
           memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)
           search: random binary tree search in primary working set
-            lock: perform spin lock/unlock on first dword in primary working set```
+            lock: perform spin lock/unlock on first dword in primary working set
+```
