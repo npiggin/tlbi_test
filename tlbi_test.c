@@ -147,6 +147,7 @@ struct ctrl {
 	size_t size;
 	volatile bool run;
 	void *priv_mem[MAX_CONCURRENCY];
+	struct random_data random_data[MAX_CONCURRENCY];
 	unsigned long iters_completed[MAX_CONCURRENCY];
 };
 
@@ -469,11 +470,14 @@ static void fill_mem(void *mem, size_t size)
 	}
 }
 
-static void search_mem(void *mem, size_t size)
+static void search_mem(void *mem, int nr, size_t size)
 {
-	size_t nr = size / sizeof(struct node);
+	size_t sz = size / sizeof(struct node);
+	int32_t result;
 
-	find(tree_root, random() % nr);
+	random_r(&ctrl->random_data[nr], &result);
+
+	find(tree_root, (unsigned int)result % sz);
 }
 
 struct rl {
@@ -543,11 +547,13 @@ static void tlbi_pre_work(int nr)
 		if (snoop_work == SNOOP_MEMCPY)
 			ctrl->priv_mem[nr] = alloc_mem(size);
 		if (snoop_work == SNOOP_SEARCH) {
-			search_mem(mem, size);
-			search_mem(mem, size);
-			search_mem(mem, size);
-			search_mem(mem, size);
-			search_mem(mem, size);
+			ctrl->priv_mem[nr] = malloc(1024);
+			initstate_r(nr, ctrl->priv_mem[nr], 1024, &ctrl->random_data[nr]);
+			search_mem(mem, nr, size);
+			search_mem(mem, nr, size);
+			search_mem(mem, nr, size);
+			search_mem(mem, nr, size);
+			search_mem(mem, nr, size);
 		}
 	}
 }
@@ -605,7 +611,7 @@ static void tlbi_work(int nr)
 			if (snoop_work == SNOOP_MEMSET) {
 				memset(mem, nr, size);
 			} else if (snoop_work == SNOOP_SEARCH) {
-				search_mem(mem, size);
+				search_mem(mem, nr, size);
 			} else if (snoop_work == SNOOP_MEMCPY) {
 				memcpy(ctrl->priv_mem[nr], mem, size);
 			} else if (snoop_work == SNOOP_LOCK) {
