@@ -375,6 +375,11 @@ static void *alloc_mem(size_t size)
 				perror("madvise");
 				exit(1);
 			}
+		} else {
+			if (madvise(mem, size, MADV_NOHUGEPAGE) == -1) {
+				perror("madvise");
+				exit(1);
+			}
 		}
 	}
 
@@ -568,9 +573,13 @@ static void *my_snooper_fn(void *arg)
 	} else {
 		set_cpu(ctrl->cpu[(nr + 1) % nr_cpus]);
 	}
+	set_cpu(ctrl->cpu[nr] + 128);
 
+	/* Need to keep the thread running otherwise it gets trimmed out of
+	 * the mm cpumask */
 	while (!ctrl->finished[nr])
-		waitval(&ctrl->finished[nr], 0);
+//		waitval(&ctrl->finished[nr], 0);
+		cpu_relax();
 }
 
 static void tlbi_pre_work(int nr)
@@ -592,8 +601,9 @@ static void tlbi_pre_work(int nr)
 	} else {
 		/* Arbitrary snoopers only supported with threaded */
 		assert(!use_procs);
-		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET)
+		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET) {
 			ctrl->priv_mem[nr] = alloc_mem(size);
+		}
 		if (snoop_work == SNOOP_SEARCH) {
 			ctrl->priv_mem[nr] = malloc(1024);
 			initstate_r(nr, ctrl->priv_mem[nr], 1024, &ctrl->random_data[nr]);
@@ -613,8 +623,14 @@ static void tlbi_work(int nr)
 	size_t iters = 0;
 
 	if (nr < nr_tlbi_cpus) {
-		size_t s = size / nr_tlbi_cpus;
-		void *m = mem + s * nr;
+		size_t s = size;
+		void *m = mem;
+
+		if (!use_procs) {
+			s = size / nr_tlbi_cpus;
+			m = mem + s * nr;
+		}
+
 		while (ctrl->run) {
 			struct rl rl;
 
@@ -709,7 +725,8 @@ static void print_help(void)
 	printf("              rw: PROT_READ|PROT_WRITE (no-op, no tlbies issued)\n");
 	printf("  --snoop_work=W           snoop work (default search)\n");
 	printf("            noop: loop no memory accesses (except trivial ifetch)\n");
-	printf("          memset: store to all primary working set\n");
+	printf("          memset: store to per-thread memory (not subject to tlbi)\n");
+	printf("   shared_memset: store to all primary working set\n");
 	printf("          memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)\n");
 	printf("          search: random binary tree search in primary working set\n");
 	printf("            lock: perform spin lock/unlock on first dword in primary working set\n");
