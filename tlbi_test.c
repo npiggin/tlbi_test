@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -132,16 +133,19 @@ static pthread_t threads[MAX_CONCURRENCY];
 static pthread_mutex_t ctrl_mutex;
 static pthread_cond_t ctrl_cond;
 static int nr_started;
+static bool use_procs = false;
 
 struct ctrl {
 	volatile bool started[MAX_CONCURRENCY] __attribute__((aligned(128)));
 	volatile bool pre_start[MAX_CONCURRENCY] __attribute__((aligned(128)));
-	volatile bool finished[MAX_CONCURRENCY] __attribute__((aligned(128)));
+	volatile uint32_t finished[MAX_CONCURRENCY] __attribute__((aligned(128)));
 	volatile bool pre;
 	volatile bool start;
 	volatile bool stop;
 	volatile bool finish;
 	volatile bool procs;
+
+	int cpu[MAX_CONCURRENCY];
 
 	void *mem;
 	size_t size;
@@ -167,9 +171,11 @@ static noinline void work_fn(int nr)
 		pre_work(nr);
 	}
 
-	pthread_mutex_lock(&ctrl_mutex);
-	nr_started++;
-	pthread_mutex_unlock(&ctrl_mutex);
+	if (!use_procs) {
+		pthread_mutex_lock(&ctrl_mutex);
+		nr_started++;
+		pthread_mutex_unlock(&ctrl_mutex);
+	}
 
 	ctrl->started[nr] = 1;
 
@@ -179,13 +185,16 @@ static noinline void work_fn(int nr)
 	work(nr);
 
 	ctrl->finished[nr] = 1;
+	wakeval(&ctrl->finished[nr]);
 
-	pthread_mutex_lock(&ctrl_mutex);
-	nr_started--;
-	if (nr_started == 0) {
-		pthread_cond_signal(&ctrl_cond);
+	if (!use_procs) {
+		pthread_mutex_lock(&ctrl_mutex);
+		nr_started--;
+		if (nr_started == 0) {
+			pthread_cond_signal(&ctrl_cond);
+		}
+		pthread_mutex_unlock(&ctrl_mutex);
 	}
-	pthread_mutex_unlock(&ctrl_mutex);
 
 	while (!ctrl->stop)
 		cpu_relax();
@@ -198,7 +207,7 @@ static void *thread_fn(void *arg)
 	work_fn(i);
 }
 
-static void create_threads(int nr, int *list, bool use_procs)
+static void create_threads(int nr, int *list)
 {
 //	struct sched_param param = { .sched_priority = 0 };
 	pthread_attr_t attr;
@@ -224,6 +233,8 @@ static void create_threads(int nr, int *list, bool use_procs)
 		for (i = 0; i < nr; i++) {
 			int cpu = list[i];
 
+			ctrl->cpu[i] = cpu;
+
 			set_cpu(cpu);
 
 			procs[i] = fork();
@@ -244,6 +255,8 @@ static void create_threads(int nr, int *list, bool use_procs)
 
 		for (i = 0; i < nr; i++) {
 			int cpu = list[i];
+
+			ctrl->cpu[i] = cpu;
 
 			set_cpu(cpu);
 
@@ -291,15 +304,19 @@ static void wait_threads(int nr)
 
 	ctrl->finish = 1;
 
-	pthread_mutex_lock(&ctrl_mutex);
-	while (nr_started) {
-		pthread_cond_wait(&ctrl_cond, &ctrl_mutex);
+	if (!use_procs) {
+		pthread_mutex_lock(&ctrl_mutex);
+		while (nr_started) {
+			pthread_cond_wait(&ctrl_cond, &ctrl_mutex);
+		}
+		pthread_mutex_unlock(&ctrl_mutex);
 	}
-	pthread_mutex_unlock(&ctrl_mutex);
 
 	for (i = 0; i < nr; i++) {
-		while (!ctrl->finished[i])
-			cpu_relax();
+		while (!ctrl->finished[i]) {
+			waitval(&ctrl->finished[i], 0);
+//			cpu_relax();
+		}
 	}
 
 	ctrl->stop = 1;
@@ -538,13 +555,43 @@ enum snoop_work {
 };
 static int snoop_work = SNOOP_SEARCH;
 
+static void *my_snooper_fn(void *arg)
+{
+	int nr = (long)arg;
+
+	/* Put it on a different CPU */
+	if (nr_cpus == 1) {
+		if (ctrl->cpu[nr] == 0)
+			set_cpu(1);
+		else
+			set_cpu(0);
+	} else {
+		set_cpu(ctrl->cpu[(nr + 1) % nr_cpus]);
+	}
+
+	while (!ctrl->finished[nr])
+		waitval(&ctrl->finished[nr], 0);
+}
+
 static void tlbi_pre_work(int nr)
 {
 	void *mem = ctrl->mem;
 	size_t size = ctrl->size;
 
 	if (nr < nr_tlbi_cpus) {
+		if (use_procs) {
+			pthread_t my_snooper;
+
+			/*
+			 * In process mode, a single snooper per process is
+			 * created.
+			 */
+			if (pthread_create(&my_snooper, NULL, my_snooper_fn, (void *)(long)nr) != 0)
+				err("pthread_create");
+		}
 	} else {
+		/* Arbitrary snoopers only supported with threaded */
+		assert(!use_procs);
 		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET)
 			ctrl->priv_mem[nr] = alloc_mem(size);
 		if (snoop_work == SNOOP_SEARCH) {
@@ -644,7 +691,9 @@ static void print_help(void)
 	printf("Usage: tlbi_test [OPTION]...\n");
 	printf("Exercise TLB invalidation via mprotect(2) system calls.\n");
 	printf("  Pages are divided between tlbi CPUs, and used by all snooper CPUs.\n");
+	printf("  Snoopers may not be used when using processes.\n");
 	printf("Options:\n");
+	printf("  --use_procs              test uses processes (default threads)\n");
 	printf("  --runtime=T              test runtime, in seconds (default 5)\n");
 	printf("  --pages=P                pages to allocate (default 1 per tlbi CPU, or 1 if no tlbi CPUs)\n");
 	printf("  --tlbi_cpulist=CPULIST   CPUs to run tlbi threads on (default none)\n");
@@ -743,6 +792,7 @@ static void getopts(int argc, char *argv[])
 		int option_index;
 		int c;
 		struct option long_options[] = {
+			{"use_procs",		no_argument, 0, 0 },
 			{"runtime",		required_argument, 0, 0 },
 			{"pages",		required_argument, 0, 0 },
 			{"tlbi_cpulist",	required_argument, 0, 0 },
@@ -775,7 +825,10 @@ static void getopts(int argc, char *argv[])
 		}
 
 		name = long_options[option_index].name;
-		if        (!strcmp(name, "runtime")) {
+		if        (!strcmp(name, "use_procs")) {
+			use_procs = true;
+
+		} else if (!strcmp(name, "runtime")) {
 			char *endptr;
 			runtime = strtol(optarg, &endptr, 0);
 			if (runtime <= 0 || optarg == endptr || strlen(endptr) != 0)
@@ -969,7 +1022,7 @@ int main(int argc, char *argv[])
 	pre_work = tlbi_pre_work;
 	work = tlbi_work;
 
-	create_threads(nr_cpus, cpulist, false);
+	create_threads(nr_cpus, cpulist);
 	ctrl->mem = mem;
 	ctrl->size = size;
 	ctrl->run = true;

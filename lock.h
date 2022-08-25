@@ -1,3 +1,37 @@
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <limits.h>
+#include <errno.h>
+
+static int futex(uint32_t *uaddr, int futex_op, uint32_t val,
+		const struct timespec *timeout, uint32_t uaddr2, uint32_t val3)
+{
+	return syscall(SYS_futex, uaddr, futex_op, val, timeout, uaddr2, val3);
+}
+
+static void waitval(volatile uint32_t *mem, uint32_t val)
+{
+	if (futex((uint32_t *)mem, FUTEX_WAIT, val, NULL, 0, 0) == -1) {
+		if (errno == EAGAIN)
+			return;
+		if (errno == EINTR)
+			return;
+
+		perror("futex wait");
+		exit(1);
+	}
+}
+
+static void wakeval(volatile uint32_t *mem)
+{
+	if (futex((uint32_t *)mem, FUTEX_WAKE, INT_MAX, NULL, 0, 0) == -1) {
+		perror("futex wake");
+		exit(1);
+	}
+}
+
+
 #ifdef __powerpc__
 static inline void inc(unsigned long *mem)
 {
