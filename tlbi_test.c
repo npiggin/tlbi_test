@@ -526,11 +526,12 @@ enum tlbi_strategy {
 	TLBI_ALL,
 };
 static int tlbi_strategy = TLBI_PAGE;
-static int tlbi_prot = PROT_READ;
+static int tlbi_prot = PROT_READ|PROT_WRITE|PROT_EXEC;
 
 enum snoop_work {
 	SNOOP_NOOP,
 	SNOOP_MEMSET,
+	SNOOP_SHARED_MEMSET,
 	SNOOP_MEMCPY,
 	SNOOP_SEARCH,
 	SNOOP_LOCK,
@@ -544,7 +545,7 @@ static void tlbi_pre_work(int nr)
 
 	if (nr < nr_tlbi_cpus) {
 	} else {
-		if (snoop_work == SNOOP_MEMCPY)
+		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET)
 			ctrl->priv_mem[nr] = alloc_mem(size);
 		if (snoop_work == SNOOP_SEARCH) {
 			ctrl->priv_mem[nr] = malloc(1024);
@@ -609,6 +610,8 @@ static void tlbi_work(int nr)
 	} else {
 		while (ctrl->run) {
 			if (snoop_work == SNOOP_MEMSET) {
+				memset(ctrl->priv_mem[nr], nr, size);
+			} else if (snoop_work == SNOOP_SHARED_MEMSET) {
 				memset(mem, nr, size);
 			} else if (snoop_work == SNOOP_SEARCH) {
 				search_mem(mem, nr, size);
@@ -650,8 +653,9 @@ static void print_help(void)
 	printf("  --tlbi_strategy=S        tlbi strategy (default page)\n");
 	printf("            page: mprotect individual pages\n");
 	printf("             all: mprotect all pages\n");
-	printf("  --tlbi_prot=P            tlbi protection mprotect (default ro)\n");
+	printf("  --tlbi_prot=P            tlbi protection mprotect (default x)\n");
 	printf("            none: PROT_NONE (all accesses fault)\n");
+	printf("               x: PROT_READ|PROT_WRITE|PROT_EXEC (exec clear drives invalidate)\n");
 	printf("              ro: PROT_READ (stores fault)\n");
 	printf("              rw: PROT_READ|PROT_WRITE (no-op, no tlbies issued)\n");
 	printf("  --snoop_work=W           snoop work (default search)\n");
@@ -806,6 +810,8 @@ static void getopts(int argc, char *argv[])
 		} else if (!strcmp(name, "tlbi_prot")) {
 			if (!strcmp(optarg, "none"))
 				tlbi_prot = PROT_NONE;
+			else if (!strcmp(optarg, "x"))
+				tlbi_prot = PROT_READ|PROT_WRITE|PROT_EXEC;
 			else if (!strcmp(optarg, "ro"))
 				tlbi_prot = PROT_READ;
 			else if (!strcmp(optarg, "rw"))
@@ -818,6 +824,8 @@ static void getopts(int argc, char *argv[])
 				snoop_work = SNOOP_NOOP;
 			else if (!strcmp(optarg, "memset"))
 				snoop_work = SNOOP_MEMSET;
+			else if (!strcmp(optarg, "shared_memset"))
+				snoop_work = SNOOP_SHARED_MEMSET;
 			else if (!strcmp(optarg, "memcpy"))
 				snoop_work = SNOOP_MEMCPY;
 			else if (!strcmp(optarg, "search"))
@@ -885,7 +893,7 @@ static void print_runtime(void)
 		if (tlbi_per_sec)
 			printf("tlbi ratelimit:		%d per sec per thread\n", tlbi_per_sec);
 		printf("tlbi strategy		%s\n", (tlbi_strategy == TLBI_PAGE ? "page" : "all"));
-		printf("tlbi prot		%s\n", (tlbi_prot == PROT_NONE ? "none" : (tlbi_prot == PROT_READ ? "ro" : "rw")));
+		printf("tlbi prot		%s\n", (tlbi_prot == PROT_NONE ? "none" : (tlbi_prot == PROT_READ ? "ro" : (tlbi_prot == PROT_READ|PROT_WRITE|PROT_EXEC ? "x" : "rw"))));
 	}
 
 	printf("snoop threads:		%d\n", nr_snoop_cpus);
@@ -902,6 +910,9 @@ static void print_runtime(void)
 			break;
 		case SNOOP_MEMSET:
 			printf("memset\n");
+			break;
+		case SNOOP_SHARED_MEMSET:
+			printf("shared memset\n");
 			break;
 		case SNOOP_MEMCPY:
 			printf("memcpy\n");
