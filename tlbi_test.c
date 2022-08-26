@@ -149,6 +149,7 @@ struct ctrl {
 
 	void *mem;
 	size_t size;
+	size_t snoop_size;
 	volatile bool run;
 	void *priv_mem[MAX_CONCURRENCY];
 	struct random_data random_data[MAX_CONCURRENCY];
@@ -541,6 +542,7 @@ static int *cpulist;
 
 static int runtime = 5;
 static size_t nr_pages = 0;
+static size_t snoop_working_set = 0;
 
 static int tlbi_per_sec = 0;
 enum tlbi_strategy {
@@ -586,6 +588,7 @@ static void tlbi_pre_work(int nr)
 {
 	void *mem = ctrl->mem;
 	size_t size = ctrl->size;
+	size_t snoop_size = ctrl->snoop_size;
 
 	if (nr < nr_tlbi_cpus) {
 		if (use_procs) {
@@ -607,11 +610,11 @@ static void tlbi_pre_work(int nr)
 		if (snoop_work == SNOOP_SEARCH) {
 			ctrl->priv_mem[nr] = malloc(1024);
 			initstate_r(nr, ctrl->priv_mem[nr], 1024, &ctrl->random_data[nr]);
-			search_mem(mem, nr, size);
-			search_mem(mem, nr, size);
-			search_mem(mem, nr, size);
-			search_mem(mem, nr, size);
-			search_mem(mem, nr, size);
+			search_mem(mem, nr, snoop_size);
+			search_mem(mem, nr, snoop_size);
+			search_mem(mem, nr, snoop_size);
+			search_mem(mem, nr, snoop_size);
+			search_mem(mem, nr, snoop_size);
 		}
 	}
 }
@@ -620,6 +623,7 @@ static void tlbi_work(int nr)
 {
 	void *mem = ctrl->mem;
 	size_t size = ctrl->size;
+	size_t snoop_size = ctrl->snoop_size;
 	size_t iters = 0;
 
 	if (nr < nr_tlbi_cpus) {
@@ -673,13 +677,13 @@ static void tlbi_work(int nr)
 	} else {
 		while (ctrl->run) {
 			if (snoop_work == SNOOP_MEMSET) {
-				memset(ctrl->priv_mem[nr], nr, size);
+				memset(ctrl->priv_mem[nr], nr, snoop_size);
 			} else if (snoop_work == SNOOP_SHARED_MEMSET) {
-				memset(mem, nr, size);
+				memset(mem, nr, snoop_size);
 			} else if (snoop_work == SNOOP_SEARCH) {
-				search_mem(mem, nr, size);
+				search_mem(mem, nr, snoop_size);
 			} else if (snoop_work == SNOOP_MEMCPY) {
-				memcpy(ctrl->priv_mem[nr], mem, size);
+				memcpy(ctrl->priv_mem[nr], mem, snoop_size);
 			} else if (snoop_work == SNOOP_LOCK) {
 				lock(mem);
 				unlock(mem);
@@ -730,6 +734,7 @@ static void print_help(void)
 	printf("          memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)\n");
 	printf("          search: random binary tree search in primary working set\n");
 	printf("            lock: perform spin lock/unlock on first dword in primary working set\n");
+	printf("  --snoop_working_set=WS   working set size (bytes) for memset (default same size as primary working set)\n");
 }
 
 static void parse_cpulist(const char *str, int *nr, int **cpus)
@@ -818,6 +823,7 @@ static void getopts(int argc, char *argv[])
 			{"tlbi_strategy",	required_argument, 0, 0 },
 			{"tlbi_prot",		required_argument, 0, 0 },
 			{"snoop_work",		required_argument, 0, 0 },
+			{"snoop_working_set",	required_argument, 0, 0 },
 			{0, 0, 0, 0 }
 		};
 
@@ -905,6 +911,12 @@ static void getopts(int argc, char *argv[])
 			else
 				goto badopt;
 
+		} else if (!strcmp(name, "snoop_working_set")) {
+			char *endptr;
+			snoop_working_set = strtol(optarg, &endptr, 0);
+			if (snoop_working_set <= 0 || optarg == endptr || strlen(endptr) != 0)
+				goto badopt;
+
 		} else {
 			printf("Unknown option %s", name);
 			if (optarg)
@@ -929,6 +941,11 @@ static void getopts(int argc, char *argv[])
 	nr_cpus = nr_tlbi_cpus + nr_snoop_cpus;
 	if (nr_cpus == 0) {
 		fprintf(stderr, "Error: must specify at least one CPU\n");
+		exit(1);
+	}
+
+	if (nr_snoop_cpus && use_procs) {
+		fprintf(stderr, "Error: use_procs not compatible with snopers_cpulist\n");
 		exit(1);
 	}
 
@@ -1013,6 +1030,8 @@ int main(int argc, char *argv[])
 	print_runtime();
 
 	size = nr_pages * PAGE_SIZE;
+	if (snoop_working_set == 0)
+		snoop_working_set = size;
 
 	set_cpu(0);
 
@@ -1032,7 +1051,7 @@ int main(int argc, char *argv[])
 	mem = alloc_mem(size);
 
 	if (nr_snoop_cpus > 0 && snoop_work == SNOOP_SEARCH)
-		fill_mem(mem, size);
+		fill_mem(mem, snoop_working_set);
 
 	perf_setup();
 
@@ -1042,6 +1061,7 @@ int main(int argc, char *argv[])
 	create_threads(nr_cpus, cpulist);
 	ctrl->mem = mem;
 	ctrl->size = size;
+	ctrl->snoop_size = snoop_working_set;
 	ctrl->run = true;
 	prestart_threads(nr_cpus);
 
