@@ -1123,7 +1123,7 @@ int main(int argc, char *argv[])
 			for (i = 0; i < nr_tlbi_cpus; i++)
 				ops += ctrl->iters_completed[i];
 			printf("   tlbi threads  % 10.0lf op/s\n", (double)ops / ((double)ns / 1000000000.0f));
-			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_tlbi_cpus / ((double)ns / 1000000000.0f), (double)ns / ops / nr_tlbi_cpus);
+			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_tlbi_cpus / ((double)ns / 1000000000.0f), (double)ns / (ops / nr_tlbi_cpus));
 		}
 
 		if (nr_snoop_cpus) {
@@ -1131,7 +1131,7 @@ int main(int argc, char *argv[])
 			for (i = 0; i < nr_snoop_cpus; i++)
 				ops += ctrl->iters_completed[nr_tlbi_cpus + i];
 			printf("  snoop threads  % 10.0lf op/s\n", (double)ops / ((double)ns / 1000000000.0f));
-			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_snoop_cpus / ((double)ns / 1000000000.0f), (double)ns / ops / nr_snoop_cpus);
+			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_snoop_cpus / ((double)ns / 1000000000.0f), (double)ns / (ops / nr_snoop_cpus));
 		}
 
 		if (verbose_result) {
