@@ -558,6 +558,8 @@ enum snoop_work {
 	SNOOP_SHARED_MEMSET,
 	SNOOP_MEMCPY,
 	SNOOP_SEARCH,
+	SNOOP_INV_LOCK,
+	SNOOP_SHARED_LOCK,
 	SNOOP_LOCK,
 };
 static int snoop_work = SNOOP_SEARCH;
@@ -619,6 +621,8 @@ static void tlbi_pre_work(int nr)
 	}
 }
 
+static unsigned long shared_lock __attribute__((aligned(128)));
+
 static void tlbi_work(int nr)
 {
 	void *mem = ctrl->mem;
@@ -675,6 +679,8 @@ static void tlbi_work(int nr)
 			}
 		}
 	} else {
+		unsigned long private_lock;
+
 		while (ctrl->run) {
 			if (snoop_work == SNOOP_MEMSET) {
 				memset(ctrl->priv_mem[nr], nr, snoop_size);
@@ -685,6 +691,12 @@ static void tlbi_work(int nr)
 			} else if (snoop_work == SNOOP_MEMCPY) {
 				memcpy(ctrl->priv_mem[nr], mem, snoop_size);
 			} else if (snoop_work == SNOOP_LOCK) {
+				lock(&private_lock);
+				unlock(&private_lock);
+			} else if (snoop_work == SNOOP_SHARED_LOCK) {
+				lock(&shared_lock);
+				unlock(&shared_lock);
+			} else if (snoop_work == SNOOP_INV_LOCK) {
 				lock(mem);
 				unlock(mem);
 			} else if (snoop_work == SNOOP_NOOP) {
@@ -720,20 +732,22 @@ static void print_help(void)
 	printf("  --snoop_cpulist=CPULIST  CPUs to run snoop threads on (default none)\n");
 	printf("  --tlbi_ratelimit=RATE    Limit each tlbi CPU, rate per second (default no limit)\n");
 	printf("  --tlbi_strategy=S        tlbi strategy (default page)\n");
-	printf("            page: mprotect individual pages\n");
-	printf("             all: mprotect all pages\n");
+	printf("                page: mprotect individual pages\n");
+	printf("                 all: mprotect all pages\n");
 	printf("  --tlbi_prot=P            tlbi protection mprotect (default x)\n");
-	printf("            none: PROT_NONE (all accesses fault)\n");
-	printf("               x: PROT_READ|PROT_WRITE|PROT_EXEC (exec clear drives invalidate)\n");
-	printf("              ro: PROT_READ (stores fault)\n");
-	printf("              rw: PROT_READ|PROT_WRITE (no-op, no tlbies issued)\n");
+	printf("                none: PROT_NONE (all accesses fault)\n");
+	printf("                   x: PROT_READ|PROT_WRITE|PROT_EXEC (exec clear drives invalidate)\n");
+	printf("                  ro: PROT_READ (stores fault)\n");
+	printf("                  rw: PROT_READ|PROT_WRITE (no-op, no tlbies issued)\n");
 	printf("  --snoop_work=W           snoop work (default search)\n");
-	printf("            noop: loop no memory accesses (except trivial ifetch)\n");
-	printf("          memset: store to per-thread memory (not subject to tlbi)\n");
-	printf("   shared_memset: store to all primary working set\n");
-	printf("          memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)\n");
-	printf("          search: random binary tree search in primary working set\n");
-	printf("            lock: perform spin lock/unlock on first dword in primary working set\n");
+	printf("                noop: loop no memory accesses (except trivial ifetch)\n");
+	printf("              memset: store to per-thread memory (not subject to tlbi)\n");
+	printf("       shared_memset: store to all primary working set\n");
+	printf("              memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)\n");
+	printf("              search: random binary tree search in primary working set\n");
+	printf("   invalidating_lock: perform spin lock/unlock on first dword in primary working set\n");
+	printf("         shared_lock: perform spin lock/unlock to shared dword (not in working set)\n");
+	printf("                lock: perform spin lock/unlock to per-thread memory\n");
 	printf("  --snoop_working_set=WS   working set size (bytes) for memset (default same size as primary working set)\n");
 }
 
@@ -906,6 +920,10 @@ static void getopts(int argc, char *argv[])
 				snoop_work = SNOOP_MEMCPY;
 			else if (!strcmp(optarg, "search"))
 				snoop_work = SNOOP_SEARCH;
+			else if (!strcmp(optarg, "invalidating_lock"))
+				snoop_work = SNOOP_INV_LOCK;
+			else if (!strcmp(optarg, "shared_lock"))
+				snoop_work = SNOOP_SHARED_LOCK;
 			else if (!strcmp(optarg, "lock"))
 				snoop_work = SNOOP_LOCK;
 			else
@@ -998,7 +1016,7 @@ static void print_runtime(void)
 		case SNOOP_MEMSET:
 			printf("memset\n");
 			break;
-		case SNOOP_SHARED_MEMSET:
+		case SNOOP_SHARED_MEMSET: /* XXX: invalidating and shared */
 			printf("shared memset\n");
 			break;
 		case SNOOP_MEMCPY:
@@ -1006,6 +1024,12 @@ static void print_runtime(void)
 			break;
 		case SNOOP_SEARCH:
 			printf("search\n");
+			break;
+		case SNOOP_INV_LOCK: /* XXX invalidating and shared */
+			printf("invalidating lock\n");
+			break;
+		case SNOOP_SHARED_LOCK:
+			printf("shared lock\n");
 			break;
 		case SNOOP_LOCK:
 			printf("lock\n");
