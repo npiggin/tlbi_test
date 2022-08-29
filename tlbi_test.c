@@ -134,6 +134,7 @@ static pthread_mutex_t ctrl_mutex;
 static pthread_cond_t ctrl_cond;
 static int nr_started;
 static bool use_procs = false;
+static bool verbose_result = false;
 
 struct ctrl {
 	volatile bool started[MAX_CONCURRENCY] __attribute__((aligned(128)));
@@ -829,6 +830,7 @@ static void getopts(int argc, char *argv[])
 		int c;
 		struct option long_options[] = {
 			{"use_procs",		no_argument, 0, 0 },
+			{"verbose_result",	no_argument, 0, 0 },
 			{"runtime",		required_argument, 0, 0 },
 			{"pages",		required_argument, 0, 0 },
 			{"tlbi_cpulist",	required_argument, 0, 0 },
@@ -864,6 +866,9 @@ static void getopts(int argc, char *argv[])
 		name = long_options[option_index].name;
 		if        (!strcmp(name, "use_procs")) {
 			use_procs = true;
+
+		} else if (!strcmp(name, "verbose_result")) {
+			verbose_result = true;
 
 		} else if (!strcmp(name, "runtime")) {
 			char *endptr;
@@ -1111,16 +1116,34 @@ int main(int argc, char *argv[])
 	perf_stop(&ns, &cycles);
 	{
 		int i;
+
 		printf("Result:\n");
-		for (i = 0; i < nr_tlbi_cpus; i++) {
-			uint64_t op = ctrl->iters_completed[i];
-			printf("   tlbi thread %u % 10.0lf op/s (% 10.1lf ns/op)\n", i, (double)op / ((double)ns / 1000000000.0f), (double)ns / op);
+		if (nr_tlbi_cpus) {
+			uint64_t ops = 0;
+			for (i = 0; i < nr_tlbi_cpus; i++)
+				ops += ctrl->iters_completed[i];
+			printf("   tlbi threads  % 10.0lf op/s\n", (double)ops / ((double)ns / 1000000000.0f));
+			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_tlbi_cpus / ((double)ns / 1000000000.0f), (double)ns / ops / nr_tlbi_cpus);
 		}
-		for (i = 0; i < nr_snoop_cpus; i++) {
-			uint64_t op = ctrl->iters_completed[nr_tlbi_cpus + i];
-			printf("  snoop thread %u % 10.0lf op/s (% 10.1lf ns/op)\n", i, (double)op / ((double)ns / 1000000000.0f), (double)ns / op);
+
+		if (nr_snoop_cpus) {
+			uint64_t ops = 0;
+			for (i = 0; i < nr_snoop_cpus; i++)
+				ops += ctrl->iters_completed[nr_tlbi_cpus + i];
+			printf("  snoop threads  % 10.0lf op/s\n", (double)ops / ((double)ns / 1000000000.0f));
+			printf("     per thread  % 10.0lf op/s (% 10.1lf ns/op)\n", (double)ops / nr_snoop_cpus / ((double)ns / 1000000000.0f), (double)ns / ops / nr_snoop_cpus);
 		}
-		fflush(stdout);
+
+		if (verbose_result) {
+			for (i = 0; i < nr_tlbi_cpus; i++) {
+				uint64_t op = ctrl->iters_completed[i];
+				printf("   tlbi thread %u % 10.0lf op/s (% 10.1lf ns/op)\n", i, (double)op / ((double)ns / 1000000000.0f), (double)ns / op);
+			}
+			for (i = 0; i < nr_snoop_cpus; i++) {
+				uint64_t op = ctrl->iters_completed[nr_tlbi_cpus + i];
+				printf("  snoop thread %u % 10.0lf op/s (% 10.1lf ns/op)\n", i, (double)op / ((double)ns / 1000000000.0f), (double)ns / op);
+			}
+		}
 	}
 	stop_threads(nr_cpus);
 }
