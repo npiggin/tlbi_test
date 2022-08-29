@@ -1037,6 +1037,21 @@ static void print_runtime(void)
 		default:
 			printf("unknown\n");
 		}
+
+		switch(snoop_work) {
+		case SNOOP_MEMSET:
+			printf("snoop working set size: %lu bytes per worker\n", snoop_working_set);
+			break;
+		case SNOOP_SHARED_MEMSET:
+		case SNOOP_SEARCH:
+			printf("snoop working set size: %lu bytes all workers\n", snoop_working_set);
+			break;
+		case SNOOP_MEMCPY:
+			printf("snoop working set size: %lu bytes all workers + %lu bytes per worker\n", snoop_working_set, snoop_working_set);
+			break;
+		default:
+			break;
+		}
 	}
 }
 
@@ -1051,11 +1066,11 @@ int main(int argc, char *argv[])
 
 	getopts(argc, argv);
 
-	print_runtime();
-
 	size = nr_pages * PAGE_SIZE;
 	if (snoop_working_set == 0)
 		snoop_working_set = size;
+
+	print_runtime();
 
 	set_cpu(0);
 
