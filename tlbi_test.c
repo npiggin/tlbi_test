@@ -568,23 +568,18 @@ static int snoop_work = SNOOP_SEARCH;
 static void *my_snooper_fn(void *arg)
 {
 	int nr = (long)arg;
+	int cpu = snoop_cpulist[nr];
 
-	/* Put it on a different CPU */
-	if (nr_cpus == 1) {
-		if (ctrl->cpu[nr] == 0)
-			set_cpu(1);
-		else
-			set_cpu(0);
-	} else {
-		set_cpu(ctrl->cpu[(nr + 1) % nr_cpus]);
-	}
-	set_cpu(ctrl->cpu[nr] + 128);
+	set_cpu(cpu);
 
-	/* Need to keep the thread running otherwise it gets trimmed out of
-	 * the mm cpumask */
-	while (!ctrl->finished[nr])
+	while (!ctrl->finished[nr]) {
+		/*
+		 * Need to keep the thread running otherwise it gets trimmed
+		 * out of the mm cpumask, so can't wait here.
+		 */
 //		waitval(&ctrl->finished[nr], 0);
 		cpu_relax();
+	}
 }
 
 static void tlbi_pre_work(int nr)
@@ -967,9 +962,19 @@ static void getopts(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (nr_snoop_cpus && use_procs) {
-		fprintf(stderr, "Error: use_procs not compatible with snopers_cpulist\n");
-		exit(1);
+	if (use_procs) {
+		if (nr_snoop_cpus != nr_tlbi_cpus) {
+			fprintf(stderr, "Error: use_procs must provide the same number of CPUs for snoopers as tlbi\n");
+			exit(1);
+		}
+		if (snoop_work != SNOOP_NOOP) {
+			fprintf(stderr, "Error: use_procs must use noop snoop work\n");
+			exit(1);
+		}
+
+		/* Main harness doens't try to start the snoopers */
+		nr_cpus -= nr_snoop_cpus;
+		nr_snoop_cpus = 0;
 	}
 
 	cpulist = malloc(nr_cpus * sizeof(int));
@@ -1006,6 +1011,8 @@ static void print_runtime(void)
 		printf("tlbi prot		%s\n", (tlbi_prot == PROT_NONE ? "none" : (tlbi_prot == PROT_READ ? "ro" : (tlbi_prot == PROT_READ|PROT_WRITE|PROT_EXEC ? "x" : "rw"))));
 	}
 
+	if (use_procs)
+		nr_snoop_cpus = nr_tlbi_cpus; /* hack to make it print */
 	printf("snoop threads:		%d\n", nr_snoop_cpus);
 	if (nr_snoop_cpus) {
 		printf("snoop CPUs:		");
@@ -1058,6 +1065,8 @@ static void print_runtime(void)
 			break;
 		}
 	}
+	if (use_procs)
+		nr_snoop_cpus = 0; /* hack */
 }
 
 int main(int argc, char *argv[])
