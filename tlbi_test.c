@@ -558,6 +558,7 @@ enum snoop_work {
 	SNOOP_MEMSET,
 	SNOOP_SHARED_MEMSET,
 	SNOOP_MEMCPY,
+	SNOOP_LOADS,
 	SNOOP_SEARCH,
 	SNOOP_INV_LOCK,
 	SNOOP_SHARED_LOCK,
@@ -602,7 +603,7 @@ static void tlbi_pre_work(int nr)
 	} else {
 		/* Arbitrary snoopers only supported with threaded */
 		assert(!use_procs);
-		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET) {
+		if (snoop_work == SNOOP_MEMCPY || snoop_work == SNOOP_MEMSET || snoop_work == SNOOP_LOADS) {
 			ctrl->priv_mem[nr] = alloc_mem(size);
 		}
 		if (snoop_work == SNOOP_SEARCH) {
@@ -618,6 +619,16 @@ static void tlbi_pre_work(int nr)
 }
 
 static unsigned long shared_lock __attribute__((aligned(128)));
+
+static __attribute__ ((__noinline__)) void do_loads(void *s, int c, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i += sizeof(long)) {
+		unsigned long *mem = s + i;
+		asm volatile("" :: "r"(*mem));
+	}
+}
 
 static void tlbi_work(int nr)
 {
@@ -686,6 +697,8 @@ static void tlbi_work(int nr)
 				search_mem(mem, nr, snoop_size);
 			} else if (snoop_work == SNOOP_MEMCPY) {
 				memcpy(ctrl->priv_mem[nr], mem, snoop_size);
+			} else if (snoop_work == SNOOP_LOADS) {
+				do_loads(ctrl->priv_mem[nr], nr, snoop_size);
 			} else if (snoop_work == SNOOP_LOCK) {
 				lock(&private_lock);
 				unlock(&private_lock);
@@ -740,6 +753,7 @@ static void print_help(void)
 	printf("              memset: store to per-thread memory (not subject to tlbi)\n");
 	printf("       shared_memset: store to all primary working set\n");
 	printf("              memcpy: memcpy load all primary working set, store to per-thread memory (not subject to tlbi)\n");
+	printf("               loads: load from per-thread memory (not subject to tlbi)\n");
 	printf("              search: random binary tree search in primary working set\n");
 	printf("   invalidating_lock: perform spin lock/unlock on first dword in primary working set\n");
 	printf("         shared_lock: perform spin lock/unlock to shared dword (not in working set)\n");
@@ -918,6 +932,8 @@ static void getopts(int argc, char *argv[])
 				snoop_work = SNOOP_SHARED_MEMSET;
 			else if (!strcmp(optarg, "memcpy"))
 				snoop_work = SNOOP_MEMCPY;
+			else if (!strcmp(optarg, "loads"))
+				snoop_work = SNOOP_LOADS;
 			else if (!strcmp(optarg, "search"))
 				snoop_work = SNOOP_SEARCH;
 			else if (!strcmp(optarg, "invalidating_lock"))
@@ -1034,6 +1050,9 @@ static void print_runtime(void)
 		case SNOOP_MEMCPY:
 			printf("memcpy\n");
 			break;
+		case SNOOP_LOADS:
+			printf("loads\n");
+			break;
 		case SNOOP_SEARCH:
 			printf("search\n");
 			break;
@@ -1052,6 +1071,7 @@ static void print_runtime(void)
 
 		switch(snoop_work) {
 		case SNOOP_MEMSET:
+		case SNOOP_LOADS:
 			printf("snoop working set size: %lu bytes per worker\n", snoop_working_set);
 			break;
 		case SNOOP_SHARED_MEMSET:
